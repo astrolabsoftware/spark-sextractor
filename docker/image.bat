@@ -1,0 +1,3 @@
+set IMAGEVERSION=v1
+set IMAGE=sextractor:%IMAGEVERSION%
+
