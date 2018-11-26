@@ -41,9 +41,9 @@ def bash(command: str) -> List[str]:
 
   """
 
-   tcmd = "time {}".format(command)
-   result = subprocess.run(command.split(), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-   return result.stdout.decode('utf-8').split("\n")
+  tcmd = "time {}".format(command)
+  result = subprocess.run(command.split(), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+  return result.stdout.decode('utf-8').split("\n")
 
 def runit(spark, files, command):
   print("==================================================== [{}]".format(command))
