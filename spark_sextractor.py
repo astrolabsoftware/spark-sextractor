@@ -39,7 +39,8 @@ def bash(command: str) -> List[str]:
   
   >>> where_am_I = bash("pwd")
 
-  """"""
+  """
+
    tcmd = "time {}".format(command)
    result = subprocess.run(command.split(), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
    return result.stdout.decode('utf-8').split("\n")
