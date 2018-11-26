@@ -1,5 +1,5 @@
 #!/bin/bash
-# Copyright 2018 Julien Peloton
+# Copyright 2018 Christian Arnault
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -22,5 +22,6 @@ package="--packages com.github.astrolabsoftware:spark-fits_2.11:0.7.1"
 
 
 # Run it!
-time spark-submit ${master} ${memory} ${package} s.py
+time spark-submit ${master} ${memory} ${package} spark_sextractor.py
+
 
