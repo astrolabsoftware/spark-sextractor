@@ -25,9 +25,8 @@ The principle is the following:
 from pyspark.sql import SparkSession
 import glob
 from typing import List
-
-
 import subprocess
+
 def bash(command: str) -> List[str]:
   """
   :param command: Unix Command line
@@ -38,6 +37,7 @@ def bash(command: str) -> List[str]:
   :Example:
   
   >>> where_am_I = bash("pwd")
+  ""
 
   """
 
@@ -45,36 +45,44 @@ def bash(command: str) -> List[str]:
   result = subprocess.run(command.split(), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
   return result.stdout.decode('utf-8').split("\n")
 
-def runit(spark, files, command):
+def run_it(spark, files, command):
+  """
+
+  :param spark: the Spark connection
+  :param files: collection of image files to analyze
+  :param command: Unix command line
+  :return: RDD
+
+  """
   print("==================================================== [{}]".format(command))
   rdd = spark.sparkContext.parallelize(files, len(files)).map( lambda x : bash('{} {}'.format(command, x))  )
   return rdd
 
 if __name__ == "__main__":
   ## Initialise your SparkSession
+
   spark = SparkSession\
     .builder\
     .getOrCreate()
 
   spark.sparkContext.setLogLevel("ERROR")
 
-  ## Read as a DataFrame a HDU of a table fits.
+  images_for_EFIGI_dataset = "/lsst/efigi-1.6/ima_g/PGC002331*_g.fits"
+  images_for_CFHT_dataset = "/lsst/data/CFHT/rawDownload/*/*.fits"
 
-  image = "/lsst/efigi-1.6/ima_g/PGC002331*_g.fits"
-  image = "file:/lsst/data/CFHT/rawDownload/g/*.fits"
-
-  N = 100
-
+  # We select a sampled subset of the dataset
+  N = 2
   import random
-  files = random.sample(glob.glob("/lsst/data/CFHT/rawDownload/*/*.fits"), N)
+  files = random.sample(glob.glob(images_for_CFHT_dataset), N)
+
+  # construct the command for Sextractor
 
   SEXDIR = "/usr/local/share/sextractor/"
-
   conf = SEXDIR + "default.sex"
   param = "/lsst/data/CFHT/default.param"
   filter = SEXDIR + "default.conv"
 
-  sex = "sex -c {} -PARAMETERS_NAME {} -FILTER_NAME {} -CATALOG_NAME {} ".format(conf, param, filter, "test.cat")
+  sex = "sex -c {} -PARAMETERS_NAME {} -FILTER_NAME {} -CATALOG_NAME {} ".format(conf, param, filter, "STDOUT")
 
   def f(x):
     import re
@@ -95,7 +103,7 @@ if __name__ == "__main__":
 # convert words into floats
 
   """
-  rdd0 = runit(spark, files, "/lsst/data/CFHT/test.sh").flatMap(lambda x : [i for i in x] ).filter(lambda x : f(x)).map(lambda x : x.split(';')).map(lambda x : [tofloat(i) for i in x]).cache().sample(0, 0.01/float(N))
+  rdd0 = run_it(spark, files, "/lsst/data/CFHT/test.sh").flatMap(lambda x : [i for i in x]).filter(lambda x : f(x)).map(lambda x : x.split(';')).map(lambda x : [tofloat(i) for i in x]).cache().sample(0, 0.01 / float(N))
 
   rdd = rdd0.map(lambda x: (x[6], x[7], abs(x[3])))
   rdd1 = rdd0.map(lambda x: (x[0], x[1], x[6], x[7], abs(x[3])))
