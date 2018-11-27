@@ -38,7 +38,7 @@ import subprocess
 
 from typing import List
 
-def runit(x: str) -> List[str]:
+def run_it(x: str) -> List[str]:
   """
   Handle one single image using the Sextractor application
 
@@ -51,6 +51,7 @@ def runit(x: str) -> List[str]:
   Default parameters are taken from the Sextractor package as they are.
   """
 
+  # Selecting the catalog variables (from /usr/local/share/sextractor/default.param)
   text = """
 NUMBER                   Running object number
 EXT_NUMBER               FITS extension number
@@ -123,11 +124,11 @@ if __name__ == "__main__":
   """
 
   # Run the Sextractor application onto all selected image files and produce the global catalog
-  rdd0 = spark.sparkContext.parallelize(files, len(files)).flatMap(lambda x: runit(x))
+  rdd0 = spark.sparkContext.parallelize(files, len(files)).flatMap(lambda x: run_it(x))
 
-  # Makes catalog as a table of floats
+  # Makes the assembled catalog as a table of floats
   rdd2 = rdd0.map(lambda x: x.split(';'))
-  rdd3 = rdd2.map(lambda x: [tofloat(i) for i in x]).cache().filter(lambda x: len(x) >= 11)
+  rdd3 = rdd2.map(lambda x: [tofloat(i) for i in x]).cache().filter(lambda x: len(x) > 1)
 
   # display a sample of catalog lines
   for i in rdd3.takeSample(False, 10): print(i)
@@ -139,14 +140,14 @@ if __name__ == "__main__":
 
   import numpy as np
 
-  raw_image = rdd6.collect()
-  image = np.array(raw_image).transpose()
+  raw_data = rdd6.collect()
+  data = np.array(raw_data).transpose()
 
   import matplotlib.pyplot as plt
 
-  x = image[0]
-  y = image[1]
-  z = image[2]
+  x = data[0]
+  y = data[1]
+  z = data[2]
 
   plt.scatter(x, y, c=z, marker='.')
 
