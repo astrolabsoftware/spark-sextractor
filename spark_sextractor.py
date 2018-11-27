@@ -45,7 +45,7 @@ def bash(command: str) -> List[str]:
   result = subprocess.run(command.split(), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
   return result.stdout.decode('utf-8').split("\n")
 
-def run_it(spark, files, command):
+def run_it(spark : SparkSession, files : List[str], command : str) -> RDD:
   """
 
   :param spark: the Spark connection
@@ -103,7 +103,8 @@ if __name__ == "__main__":
 # convert words into floats
 
   """
-  rdd0 = run_it(spark, files, "/lsst/data/CFHT/test.sh").flatMap(lambda x : [i for i in x]).filter(lambda x : f(x)).map(lambda x : x.split(';')).map(lambda x : [tofloat(i) for i in x]).cache().sample(0, 0.01 / float(N))
+
+  rdd0 = run_it(spark, files, "/lsst/data/CFHT/spark_sextractor.sh").flatMap(lambda x : [i for i in x]).filter(lambda x : f(x)).map(lambda x : x.split(';')).map(lambda x : [tofloat(i) for i in x]).cache().sample(0, 0.01 / float(N))
 
   rdd = rdd0.map(lambda x: (x[6], x[7], abs(x[3])))
   rdd1 = rdd0.map(lambda x: (x[0], x[1], x[6], x[7], abs(x[3])))
