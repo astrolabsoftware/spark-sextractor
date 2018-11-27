@@ -16,47 +16,72 @@
 # limitations under the License.
 
 """
+
 Installation of the sextractor object detection process into Apache Spark
 The principle is the following:
 - the sextractor utility is used unmodified to detect objects for a collection of astronomic images
-- Each image is handled independently to
+- Each image is handled independently to others
+- The default parameters are used
+- Catalog variables are setup on the flight
+- Catalogs are produced to stdout and injected into the Spark flow
+- all catalog lines are added to the global Spark data flow
+- Complete assembled catalog is then handled as a table that can therefore analyzed using Spark
+
 """
 
 from pyspark.sql import SparkSession
+
+import re
+import random
 import glob
-from typing import List
 import subprocess
 
-def bash(command: str) -> List[str]:
+from typing import List
+
+def runit(x: str) -> List[str]:
   """
-  :param command: Unix Command line
-  :type command: str
-  :return: execution output as a List of lines
-  :rtype: List[str]
-  
-  :Example:
-  
-  >>> where_am_I = bash("pwd")
-  ""
+  Handle one single image using the Sextractor application
 
-  """
 
-  tcmd = "time {}".format(command)
-  result = subprocess.run(command.split(), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-  return result.stdout.decode('utf-8').split("\n")
+  :param x: One image file
+  :return: a list of catalog lines (CSV format ; separated)
 
-def run_it(spark : SparkSession, files : List[str], command : str) -> RDD:
+  The Catalog variable are specified here, and written in a text default.param file and passed tp sextractor.
+
+  Default parameters are taken from the Sextractor package as they are.
   """
 
-  :param spark: the Spark connection
-  :param files: collection of image files to analyze
-  :param command: Unix command line
-  :return: RDD
+  text = """
+NUMBER                   Running object number
+EXT_NUMBER               FITS extension number
+FLUX_ISO                 Isophotal flux                                            [count]
+MAG_ISO                  Isophotal magnitude                                       [mag]
+FLUX_ISOCOR              Corrected isophotal flux                                  [count]
+MAG_ISOCOR               Corrected isophotal magnitude                             [mag]
+XPEAK_WORLD              World-x coordinate of the brightest pixel                 [deg]
+YPEAK_WORLD              World-y coordinate of the brightest pixel                 [deg]
+ALPHA_SKY                Right ascension of barycenter (native)                    [deg]
+DELTA_SKY                Declination of barycenter (native)                        [deg]
+FLUXERR_ISO              RMS error for isophotal flux                              [count]
+MAGERR_ISO               RMS error for isophotal magnitude                         [mag]
+"""
 
-  """
-  print("==================================================== [{}]".format(command))
-  rdd = spark.sparkContext.parallelize(files, len(files)).map( lambda x : bash('{} {}'.format(command, x))  )
-  return rdd
+  # Construct the default.param file in the current worker directory
+  with open("default.param", "w") as f:
+    f.write(text)
+
+  # Construct the command line for the Sextractor application
+  conf = "-c /usr/local/share/sextractor/default.sex"
+  filter = "-FILTER_NAME /usr/local/share/sextractor/default.conv"
+  params = "-PARAMETERS_NAME default.param"
+  sex = "/usr/local/bin/sex {} {} {} -CATALOG_NAME STDOUT".format(conf, params, filter)
+  command = "{} {}".format(sex, x)
+
+  # Starts the Sextractor application, catalog is produced on STDOUT and decoded and formatted as CVS lines
+  rawout = subprocess.run(command.split(), stdout=subprocess.PIPE, stderr=subprocess.PIPE).stdout.decode('utf-8').split("\n")
+  out = [re.sub("[ \t]+", ";", i) for i in rawout]
+
+  return out
 
 if __name__ == "__main__":
   ## Initialise your SparkSession
@@ -67,6 +92,7 @@ if __name__ == "__main__":
 
   spark.sparkContext.setLogLevel("ERROR")
 
+  # define the possible datasets
   images_for_EFIGI_dataset = "/lsst/efigi-1.6/ima_g/PGC002331*_g.fits"
   images_for_CFHT_dataset = "/lsst/data/CFHT/rawDownload/*/*.fits"
 
@@ -75,20 +101,12 @@ if __name__ == "__main__":
   import random
   files = random.sample(glob.glob(images_for_CFHT_dataset), N)
 
-  # construct the command for Sextractor
-
-  SEXDIR = "/usr/local/share/sextractor/"
-  conf = SEXDIR + "default.sex"
-  param = "/lsst/data/CFHT/default.param"
-  filter = SEXDIR + "default.conv"
-
-  sex = "sex -c {} -PARAMETERS_NAME {} -FILTER_NAME {} -CATALOG_NAME {} ".format(conf, param, filter, "STDOUT")
-
-  def f(x):
-    import re
-    return re.match("^[0-9]+[;][0-9]+[;]", x)
-
   def tofloat(i):
+    """
+    This UDF transform catalog fields as floats
+    :param i:
+    :return:
+    """
     try:
       return float(i)
     except:
@@ -104,28 +122,25 @@ if __name__ == "__main__":
 
   """
 
-  rdd0 = run_it(spark, files, "/lsst/data/CFHT/spark_sextractor.sh").flatMap(lambda x : [i for i in x]).filter(lambda x : f(x)).map(lambda x : x.split(';')).map(lambda x : [tofloat(i) for i in x]).cache().sample(0, 0.01 / float(N))
+  # Run the Sextractor application onto all selected image files and produce the global catalog
+  rdd0 = spark.sparkContext.parallelize(files, len(files)).flatMap(lambda x: runit(x))
 
-  rdd = rdd0.map(lambda x: (x[6], x[7], abs(x[3])))
-  rdd1 = rdd0.map(lambda x: (x[0], x[1], x[6], x[7], abs(x[3])))
+  # Makes catalog as a table of floats
+  rdd2 = rdd0.map(lambda x: x.split(';'))
+  rdd3 = rdd2.map(lambda x: [tofloat(i) for i in x]).cache().filter(lambda x: len(x) >= 11)
+
+  # display a sample of catalog lines
+  for i in rdd3.takeSample(False, 10): print(i)
+
+  # Construct some data samples for plots
+  rdd4 = rdd3.map(lambda x: (x[7], x[8], abs(x[4])))
+  rdd5 = rdd3.map(lambda x: (x[1], x[2], x[7], x[8], abs(x[4])))
+  rdd6 = rdd3.map(lambda x: (x[11], x[12], abs(x[4])))
 
   import numpy as np
 
-  raw_image = rdd1.collect()
-
-  for row in raw_image:
-    print(row)
-
-  exit()
-
-  raw_image = rdd.collect()
-
+  raw_image = rdd6.collect()
   image = np.array(raw_image).transpose()
-
-  """
-  for row in image:
-    print(row)
-  """
 
   import matplotlib.pyplot as plt
 
@@ -136,5 +151,4 @@ if __name__ == "__main__":
   plt.scatter(x, y, c=z, marker='.')
 
   plt.show()
-
 
