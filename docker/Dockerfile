@@ -46,10 +46,10 @@ RUN echo "================ Apt-get installations ===============" \
 && apt-get install -y wget
 
 
-# RUN echo "================ Libraries ===============" \
-# && apt install -y libfftw3-dev \
-# && apt install -y liblapack-dev \
-# && apt install -y libatlas-dev
+RUN echo "================ Libraries ===============" \
+&& apt install -y libfftw3-dev \
+&& apt install -y liblapack-dev \
+&& apt install -y libatlas-dev
 
 RUN echo "================ SExtractor ===============" \
 && cd /home \
