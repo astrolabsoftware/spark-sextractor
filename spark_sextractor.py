@@ -38,12 +38,12 @@ import subprocess
 
 from typing import List
 
-def run_it(x: str) -> List[str]:
+def run_it(keys: List[str], image_file: str) -> List[str]:
   """
   Handle one single image using the Sextractor application
 
-
-  :param x: One image file
+  :param keys: selected list of catalog variables
+  :param image_file: One image file
   :return: a list of catalog lines (CSV format ; separated)
 
   The Catalog variable are specified here, and written in a text default.param file and passed tp sextractor.
@@ -51,38 +51,37 @@ def run_it(x: str) -> List[str]:
   Default parameters are taken from the Sextractor package as they are.
   """
 
-  # Selecting the catalog variables (from /usr/local/share/sextractor/default.param)
-  text = """
-NUMBER                   Running object number
-EXT_NUMBER               FITS extension number
-FLUX_ISO                 Isophotal flux                                            [count]
-MAG_ISO                  Isophotal magnitude                                       [mag]
-FLUX_ISOCOR              Corrected isophotal flux                                  [count]
-MAG_ISOCOR               Corrected isophotal magnitude                             [mag]
-XPEAK_WORLD              World-x coordinate of the brightest pixel                 [deg]
-YPEAK_WORLD              World-y coordinate of the brightest pixel                 [deg]
-ALPHA_SKY                Right ascension of barycenter (native)                    [deg]
-DELTA_SKY                Declination of barycenter (native)                        [deg]
-FLUXERR_ISO              RMS error for isophotal flux                              [count]
-MAGERR_ISO               RMS error for isophotal magnitude                         [mag]
-"""
-
-  # Construct the default.param file in the current worker directory
+  # Construct the default.param file in the current worker directory from the specified keys
   with open("default.param", "w") as f:
-    f.write(text)
+    for k in keys:
+      f.write(k + "\n")
 
   # Construct the command line for the Sextractor application
   conf = "-c /usr/local/share/sextractor/default.sex"
   filter = "-FILTER_NAME /usr/local/share/sextractor/default.conv"
   params = "-PARAMETERS_NAME default.param"
   sex = "/usr/local/bin/sex {} {} {} -CATALOG_NAME STDOUT".format(conf, params, filter)
-  command = "{} {}".format(sex, x)
+  command = "{} {}".format(sex, image_file)
 
   # Starts the Sextractor application, catalog is produced on STDOUT and decoded and formatted as CVS lines
   rawout = subprocess.run(command.split(), stdout=subprocess.PIPE, stderr=subprocess.PIPE).stdout.decode('utf-8').split("\n")
   out = [re.sub("[ \t]+", ";", i) for i in rawout]
 
   return out
+
+
+def tofloat(i):
+    """
+    This UDF transform catalog fields as floats
+    :param i:
+    :return:
+    """
+
+    try:
+        return float(i)
+    except:
+        return i
+
 
 if __name__ == "__main__":
   ## Initialise your SparkSession
@@ -97,57 +96,49 @@ if __name__ == "__main__":
   images_for_EFIGI_dataset = "/lsst/efigi-1.6/ima_g/PGC002331*_g.fits"
   images_for_CFHT_dataset = "/lsst/data/CFHT/rawDownload/*/*.fits"
 
-  # We select a sampled subset of the dataset
+  # Get the possible catalog variables fro Sextractor package (from /usr/local/share/sextractor/default.param)
+  with open("/usr/local/share/sextractor/default.param", "r") as f:
+      lines = f.readlines()
+
+  all_keys = [i.split()[0][1:] for i in lines]
+
+  # Consider one subset of the possible variable keys that will be broadcasted to all workers
+  keys = ["NUMBER", "EXT_NUMBER", "FLUX_ISO", "MAG_ISO", "FLUX_ISOCOR", "MAG_ISOCOR", "XPEAK_WORLD", "YPEAK_WORLD",
+          "ALPHA_SKY", "DELTA_SKY", "FLUXERR_ISO", "MAGERR_ISO"]
+
+  # We select a sampled subset (of size=N) of the dataset
   N = 2
   import random
   files = random.sample(glob.glob(images_for_CFHT_dataset), N)
 
-  def tofloat(i):
-    """
-    This UDF transform catalog fields as floats
-    :param i:
-    :return:
-    """
-    try:
-      return float(i)
-    except:
-      return i
-
-  """
-
-# run sextractor
-# flatten the array
-# select only pure catalog lines
-# format the catalog line as an array of words
-# convert words into floats
-
-  """
-
   # Run the Sextractor application onto all selected image files and produce the global catalog
-  rdd0 = spark.sparkContext.parallelize(files, len(files)).flatMap(lambda x: run_it(x))
+  rdd0 = spark.sparkContext.parallelize(files, len(files)).flatMap(lambda x: run_it(keys, x)).cache()
 
   # Makes the assembled catalog as a table of floats
-  rdd2 = rdd0.map(lambda x: x.split(';'))
-  rdd3 = rdd2.map(lambda x: [tofloat(i) for i in x]).cache().filter(lambda x: len(x) > 1)
+  #
+  # - filters out the useless lines (without data)
+  # - suppress the heading ";" character
+  # - convert catalog values to float
+  #
+  rdd = rdd0.filter(lambda x: re.match('^[;]', x)).map(lambda x: x.split(';')[1:]).map(lambda x: [tofloat(i) for i in x])
 
   # display a sample of catalog lines
-  for i in rdd3.takeSample(False, 10): print(i)
+  for i in rdd.takeSample(False, 10): print(i)
+
+  # Convert to dataframe
+  df = rdd2.toDF(keys)
+
+  df.show(10)
 
   # Construct some data samples for plots
-  rdd4 = rdd3.map(lambda x: (x[7], x[8], abs(x[4])))
-  rdd5 = rdd3.map(lambda x: (x[1], x[2], x[7], x[8], abs(x[4])))
-  rdd6 = rdd3.map(lambda x: (x[11], x[12], abs(x[4])))
-
-  import numpy as np
-
-  raw_data = rdd6.collect()
-  data = np.array(raw_data).transpose()
+  rawdata = df.select("FLUXERR_ISO", "MAGERR_ISO", "MAG_ISO")
+  data = rawdata.toPandas().get_values().transpose()
 
   import matplotlib.pyplot as plt
 
-  x = data[0]
-  y = data[1]
-  z = data[2]
+  x = data[0].astype(float)
+  y = data[1].astype(float)
+  z = abs(data[2].astype(float))
 
   plt.scatter(x, y, c=z, marker='.')
 
