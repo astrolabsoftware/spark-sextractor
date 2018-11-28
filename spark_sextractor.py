@@ -126,7 +126,7 @@ if __name__ == "__main__":
   for i in rdd.takeSample(False, 10): print(i)
 
   # Convert to dataframe
-  df = rdd2.toDF(keys)
+  df = rdd.toDF(keys)
 
   df.show(10)
 
