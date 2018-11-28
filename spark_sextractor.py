@@ -130,11 +130,10 @@ if __name__ == "__main__":
 
   df.show(10)
 
-  # Construct some data samples for plots
-  rawdata = df.select("FLUXERR_ISO", "MAGERR_ISO", "MAG_ISO")
-  data = rawdata.toPandas().get_values().transpose()
-
   import matplotlib.pyplot as plt
+
+  # Construct some data samples for plots
+  data = df.select("FLUXERR_ISO", "MAGERR_ISO", "MAG_ISO").filter(df.MAGERR_ISO < 0.1).filter(df.FLUXERR_ISO < 2000).toPandas().get_values().transpose()
 
   x = data[0].astype(float)
   y = data[1].astype(float)
