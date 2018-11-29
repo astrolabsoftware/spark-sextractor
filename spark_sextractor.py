@@ -35,20 +35,19 @@ import re
 import random
 import glob
 import subprocess
-
 from typing import List
 
-def run_it(keys: List[str], image_file: str) -> List[str]:
+def run_sextractor(keys: List[str], image_file: str) -> List[str]:
   """
-  Handle one single image using the Sextractor application
+  UDF to handle one single image using the Sextractor application
 
   :param keys: selected list of catalog variables
   :param image_file: One image file
   :return: a list of catalog lines (CSV format ; separated)
 
-  The Catalog variable are specified here, and written in a text default.param file and passed tp sextractor.
+  The Catalog variable are specified here, and written in a text default.param file and passed to sextractor.
 
-  Default parameters are taken from the Sextractor package as they are.
+  Default parameters are taken from the Sextractor package unmodified.
   """
 
   # Construct the default.param file in the current worker directory from the specified keys
@@ -63,7 +62,7 @@ def run_it(keys: List[str], image_file: str) -> List[str]:
   sex = "/usr/local/bin/sex {} {} {} -CATALOG_NAME STDOUT".format(conf, params, filter)
   command = "{} {}".format(sex, image_file)
 
-  # Starts the Sextractor application, catalog is produced on STDOUT and decoded and formatted as CVS lines
+  # Starts the Sextractor application: catalog is produced to STDOUT (decoded and formatted as CVS lines)
   rawout = subprocess.run(command.split(), stdout=subprocess.PIPE, stderr=subprocess.PIPE).stdout.decode('utf-8').split("\n")
   out = [re.sub("[ \t]+", ";", i) for i in rawout]
 
@@ -82,47 +81,47 @@ def tofloat(i):
     except:
         return i
 
-
-if __name__ == "__main__":
-  ## Initialise your SparkSession
-
-  spark = SparkSession\
-    .builder\
-    .getOrCreate()
-
-  spark.sparkContext.setLogLevel("ERROR")
-
-  # define the possible datasets
-  images_for_EFIGI_dataset = "/lsst/efigi-1.6/ima_g/PGC002331*_g.fits"
-  images_for_CFHT_dataset = "/lsst/data/CFHT/rawDownload/*/*.fits"
-
+def catalog_variables():
+  """
+  Helper function to get all possible catalog variable names
+  :return:
+  """
   # Get the possible catalog variables fro Sextractor package (from /usr/local/share/sextractor/default.param)
   with open("/usr/local/share/sextractor/default.param", "r") as f:
       lines = f.readlines()
 
   all_keys = [i.split()[0][1:] for i in lines]
 
+
+def Sextractor(spark: SparkSession, N: int):
+  """
+  Spark pipeline to apply sextractor onto a dataset
+
+  :param spark: Spark Session
+  :param N: sample subset of FITS files
+
+  """
   # Consider one subset of the possible variable keys that will be broadcasted to all workers
   keys = ["NUMBER", "EXT_NUMBER", "FLUX_ISO", "MAG_ISO", "FLUX_ISOCOR", "MAG_ISOCOR", "XPEAK_WORLD", "YPEAK_WORLD",
           "ALPHA_SKY", "DELTA_SKY", "FLUXERR_ISO", "MAGERR_ISO"]
 
   # We select a sampled subset (of size=N) of the dataset
-  N = 2
   import random
+  images_for_CFHT_dataset = "/lsst/data/CFHT/rawDownload/*/*.fits"
   files = random.sample(glob.glob(images_for_CFHT_dataset), N)
 
   # Run the Sextractor application onto all selected image files and produce the global catalog
-  rdd0 = spark.sparkContext.parallelize(files, len(files)).flatMap(lambda x: run_it(keys, x)).cache()
+  rdd0 = spark.sparkContext.parallelize(files, len(files)).flatMap(lambda x: run_sextractor(keys, x)).cache()
 
   # Makes the assembled catalog as a table of floats
   #
   # - filters out the useless lines (without data)
-  # - suppress the heading ";" character
+  # - suppress the heading ";" character (ie. the first empty field)
   # - convert catalog values to float
   #
   rdd = rdd0.filter(lambda x: re.match('^[;]', x)).map(lambda x: x.split(';')[1:]).map(lambda x: [tofloat(i) for i in x])
 
-  # display a sample of catalog lines
+  # display a sample of catalog lines (debug)
   for i in rdd.takeSample(False, 10): print(i)
 
   # Convert to dataframe
@@ -142,4 +141,63 @@ if __name__ == "__main__":
   plt.scatter(x, y, c=z, marker='.')
 
   plt.show()
+
+def run_fits(file):
+  """
+  UDF to extract some FITS metedata from the FITS header and inject values into Spark flow
+
+  :param file:
+  :return:
+  """
+  from astropy.io import fits
+
+  with fits.open(file) as hdus:
+    h0 = hdus[0].header
+    h1 = hdus[0].header
+
+  out = [float(h0["RA_DEG"]), float(h0["DEC_DEG"]), h0["FILTER"][0]]
+
+  return out
+
+def analyze_fits(spark: SparkSession, N: int):
+  """
+  Spark pipeline to construct a dataframe with some Header metadata
+
+  :param spark: Spark Session
+  :param N: sample subset of FITS files
+
+  """
+
+  # We select a sampled subset (of size=N) of the dataset
+  import random
+  images_for_CFHT_dataset = "/lsst/data/CFHT/rawDownload/*/*.fits"
+  files = random.sample(glob.glob(images_for_CFHT_dataset), N)
+
+  # extract metadata from FITS header:
+  # - format as dataframe
+  # - get array values to be plotted
+  data = spark.sparkContext.parallelize(files, len(files)).map( lambda x : run_fits(x)).toDF(["ra", "dec", "filter"]).cache().toPandas().get_values().transpose()
+
+  x = data[0].astype(float)
+  y = data[1].astype(float)
+
+  import matplotlib.pyplot as plt
+  plt.scatter(x, y, marker='.')
+  plt.show()
+
+
+if __name__ == "__main__":
+  ## Initialise your SparkSession
+
+  spark = SparkSession\
+    .builder\
+    .getOrCreate()
+
+  spark.sparkContext.setLogLevel("ERROR")
+
+  # define the possible datasets
+  ## images_for_EFIGI_dataset = "/lsst/efigi-1.6/ima_g/PGC002331*_g.fits"
+
+  Sextractor(spark, 5)
+  analyze_fits(spark, 300)
 
