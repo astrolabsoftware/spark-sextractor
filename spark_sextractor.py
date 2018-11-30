@@ -137,6 +137,8 @@ def Sextractor(spark: SparkSession, N: int):
 
   """
 
+  print("============ Sextractor on a sample of {} files".format(N))
+
   # Keys for metadata information to be extracted from the FITS header
   fitskeys = ["RA_DEG", "DEC_DEG", "FILTER"]
 
@@ -150,7 +152,7 @@ def Sextractor(spark: SparkSession, N: int):
   files = random.sample(glob.glob(images_for_CFHT_dataset), N)
 
   # Run the Sextractor application onto all selected image files and produce the global catalog
-  rdd0 = spark.sparkContext.parallelize(files, len(files)).flatMap( lambda x : run_sextractor(fitskeys, keys, x)).cache()
+  rdd = spark.sparkContext.parallelize(files, len(files)).flatMap( lambda x : run_sextractor(fitskeys, keys, x))
 
   # Makes the assembled catalog as a table of floats
   #
@@ -158,16 +160,17 @@ def Sextractor(spark: SparkSession, N: int):
   # - suppress the heading ";" character (ie. the first empty field)
   # - convert catalog values to float
   #
-  rdd = rdd0.map(lambda x : [tofloat(i) for i in x])
+  # rdd = rdd0.map(lambda x : [tofloat(i) for i in x])
 
   # display a sample of catalog lines (debug)
-  for i in rdd.takeSample(False, 10): print(i)
+  #for i in rdd.takeSample(False, 10): print(i)
 
   # Convert to dataframe
   df = rdd.toDF(fitskeys + keys)
 
-  df.show(10)
+  df.sample(False, 0.5).show(100)
 
+  """
   import matplotlib.pyplot as plt
 
   # Construct some data samples for plots
@@ -180,6 +183,7 @@ def Sextractor(spark: SparkSession, N: int):
   plt.scatter(x, y, c=z, marker='.')
 
   plt.show()
+  """
 
 def analyze_fits(spark: SparkSession, N: int):
   """
@@ -201,15 +205,17 @@ def analyze_fits(spark: SparkSession, N: int):
   # extract metadata from FITS header:
   # - format as dataframe
   # - get array values to be plotted
-  data = spark.sparkContext.parallelize(files, len(files)).map( lambda x : run_fits(fitskeys, x)).toDF(fitskeys).cache().toPandas().get_values().transpose()
+  data = spark.sparkContext.parallelize(files, len(files)).map( lambda x : run_fits(fitskeys, x)).toDF(fitskeys)
+  data = data.filter(data.RA_DEG < 240).toPandas().get_values().transpose()
 
+  """
   x = data[0].astype(float)
   y = data[1].astype(float)
 
   import matplotlib.pyplot as plt
   plt.scatter(x, y, marker='.')
   plt.show()
-
+  """
 
 if __name__ == "__main__":
   ## Initialise your SparkSession
@@ -223,6 +229,6 @@ if __name__ == "__main__":
   # define the possible datasets
   ## images_for_EFIGI_dataset = "/lsst/efigi-1.6/ima_g/PGC002331*_g.fits"
 
-  # Sextractor(spark, 5)
-  analyze_fits(spark, 200)
+  Sextractor(spark, 2800)
+  # analyze_fits(spark, 2800)
 
