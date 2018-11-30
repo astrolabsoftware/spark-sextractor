@@ -37,7 +37,39 @@ import glob
 import subprocess
 from typing import List
 
-def run_sextractor(keys: List[str], image_file: str) -> List[str]:
+def run_fits(fitskeys, file):
+  from astropy.io import fits
+  with fits.open(file) as hdus:
+    h0 = hdus[0].header
+  ##out = [float(h0["RA_DEG"]), float(h0["DEC_DEG"]), h0["FILTER"][0]]
+  out = [ fitskeysdef[i](h0[i]) for i in fitskeys]
+  return out
+
+def run_fits(fitskeys: List[str], file: str):
+  """
+  UDF to extract some FITS metedata from the FITS header and inject values into Spark flow
+
+  :param fitskeys: Selected keys to extra from FITS Header
+  :param file: FITS file name
+
+  :return: List of extracted data
+  """
+  from astropy.io import fits
+
+  with fits.open(file) as hdus:
+    h0 = hdus[0].header
+
+  fitskeysdef = {
+      "RA_DEG": lambda x: float(x),
+      "DEC_DEG": lambda x: float(x),
+      "FILTER": lambda x: x[0],
+  }
+
+  out = [fitskeysdef[i](h0[i]) for i in fitskeys]
+
+  return out
+
+def run_sextractor(fitskeys: List[str], keys: List[str], image_file: str) -> List[str]:
   """
   UDF to handle one single image using the Sextractor application
 
@@ -49,6 +81,9 @@ def run_sextractor(keys: List[str], image_file: str) -> List[str]:
 
   Default parameters are taken from the Sextractor package unmodified.
   """
+
+  # extract metadata from the FITS file
+  outfits = run_fits(fitskeys, image_file)
 
   # Construct the default.param file in the current worker directory from the specified keys
   with open("default.param", "w") as f:
@@ -62,9 +97,9 @@ def run_sextractor(keys: List[str], image_file: str) -> List[str]:
   sex = "/usr/local/bin/sex {} {} {} -CATALOG_NAME STDOUT".format(conf, params, filter)
   command = "{} {}".format(sex, image_file)
 
-  # Starts the Sextractor application: catalog is produced to STDOUT (decoded and formatted as CVS lines)
+  # Starts the Sextractor application: catalog is produced to STDOUT (decoded and formatted as an array of values)
   rawout = subprocess.run(command.split(), stdout=subprocess.PIPE, stderr=subprocess.PIPE).stdout.decode('utf-8').split("\n")
-  out = [re.sub("[ \t]+", ";", i) for i in rawout]
+  out = [outfits + list(map(lambda x: float(x), re.sub("[ \t]+", ";", i).split(";")[1:])) for i in rawout if len(i) > 0 and i[0] != "#"]
 
   return out
 
@@ -101,6 +136,10 @@ def Sextractor(spark: SparkSession, N: int):
   :param N: sample subset of FITS files
 
   """
+
+  # Keys for metadata information to be extracted from the FITS header
+  fitskeys = ["RA_DEG", "DEC_DEG", "FILTER"]
+
   # Consider one subset of the possible variable keys that will be broadcasted to all workers
   keys = ["NUMBER", "EXT_NUMBER", "FLUX_ISO", "MAG_ISO", "FLUX_ISOCOR", "MAG_ISOCOR", "XPEAK_WORLD", "YPEAK_WORLD",
           "ALPHA_SKY", "DELTA_SKY", "FLUXERR_ISO", "MAGERR_ISO"]
@@ -111,7 +150,7 @@ def Sextractor(spark: SparkSession, N: int):
   files = random.sample(glob.glob(images_for_CFHT_dataset), N)
 
   # Run the Sextractor application onto all selected image files and produce the global catalog
-  rdd0 = spark.sparkContext.parallelize(files, len(files)).flatMap(lambda x: run_sextractor(keys, x)).cache()
+  rdd0 = spark.sparkContext.parallelize(files, len(files)).flatMap( lambda x : run_sextractor(fitskeys, keys, x)).cache()
 
   # Makes the assembled catalog as a table of floats
   #
@@ -119,13 +158,13 @@ def Sextractor(spark: SparkSession, N: int):
   # - suppress the heading ";" character (ie. the first empty field)
   # - convert catalog values to float
   #
-  rdd = rdd0.filter(lambda x: re.match('^[;]', x)).map(lambda x: x.split(';')[1:]).map(lambda x: [tofloat(i) for i in x])
+  rdd = rdd0.map(lambda x : [tofloat(i) for i in x])
 
   # display a sample of catalog lines (debug)
   for i in rdd.takeSample(False, 10): print(i)
 
   # Convert to dataframe
-  df = rdd.toDF(keys)
+  df = rdd.toDF(fitskeys + keys)
 
   df.show(10)
 
@@ -142,23 +181,6 @@ def Sextractor(spark: SparkSession, N: int):
 
   plt.show()
 
-def run_fits(file):
-  """
-  UDF to extract some FITS metedata from the FITS header and inject values into Spark flow
-
-  :param file:
-  :return:
-  """
-  from astropy.io import fits
-
-  with fits.open(file) as hdus:
-    h0 = hdus[0].header
-    h1 = hdus[0].header
-
-  out = [float(h0["RA_DEG"]), float(h0["DEC_DEG"]), h0["FILTER"][0]]
-
-  return out
-
 def analyze_fits(spark: SparkSession, N: int):
   """
   Spark pipeline to construct a dataframe with some Header metadata
@@ -173,10 +195,13 @@ def analyze_fits(spark: SparkSession, N: int):
   images_for_CFHT_dataset = "/lsst/data/CFHT/rawDownload/*/*.fits"
   files = random.sample(glob.glob(images_for_CFHT_dataset), N)
 
+  # Keys for metadata information to be extracted from the FITS header
+  fitskeys = ["RA_DEG", "DEC_DEG", "FILTER"]
+
   # extract metadata from FITS header:
   # - format as dataframe
   # - get array values to be plotted
-  data = spark.sparkContext.parallelize(files, len(files)).map( lambda x : run_fits(x)).toDF(["ra", "dec", "filter"]).cache().toPandas().get_values().transpose()
+  data = spark.sparkContext.parallelize(files, len(files)).map( lambda x : run_fits(fitskeys, x)).toDF(["ra", "dec", "filter"]).cache().toPandas().get_values().transpose()
 
   x = data[0].astype(float)
   y = data[1].astype(float)
