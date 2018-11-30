@@ -201,7 +201,7 @@ def analyze_fits(spark: SparkSession, N: int):
   # extract metadata from FITS header:
   # - format as dataframe
   # - get array values to be plotted
-  data = spark.sparkContext.parallelize(files, len(files)).map( lambda x : run_fits(fitskeys, x)).toDF(["ra", "dec", "filter"]).cache().toPandas().get_values().transpose()
+  data = spark.sparkContext.parallelize(files, len(files)).map( lambda x : run_fits(fitskeys, x)).toDF(fitskeys).cache().toPandas().get_values().transpose()
 
   x = data[0].astype(float)
   y = data[1].astype(float)
@@ -223,6 +223,6 @@ if __name__ == "__main__":
   # define the possible datasets
   ## images_for_EFIGI_dataset = "/lsst/efigi-1.6/ima_g/PGC002331*_g.fits"
 
-  Sextractor(spark, 5)
-  analyze_fits(spark, 300)
+  # Sextractor(spark, 5)
+  analyze_fits(spark, 200)
 
