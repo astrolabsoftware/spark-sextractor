@@ -63,6 +63,7 @@ def run_fits(fitskeys: List[str], file: str):
       "RA_DEG": lambda x: float(x),
       "DEC_DEG": lambda x: float(x),
       "FILTER": lambda x: x[0],
+      "RUNID": lambda x : x,
   }
 
   out = [fitskeysdef[i](h0[i]) for i in fitskeys]
@@ -140,7 +141,7 @@ def Sextractor(spark: SparkSession, N: int):
   print("============ Sextractor on a sample of {} files".format(N))
 
   # Keys for metadata information to be extracted from the FITS header
-  fitskeys = ["RA_DEG", "DEC_DEG", "FILTER"]
+  fitskeys = ["RA_DEG", "DEC_DEG", "FILTER", "RUNID"]
 
   # Consider one subset of the possible variable keys that will be broadcasted to all workers
   keys = ["NUMBER", "EXT_NUMBER", "FLUX_ISO", "MAG_ISO", "FLUX_ISOCOR", "MAG_ISOCOR", "XPEAK_WORLD", "YPEAK_WORLD",
@@ -166,24 +167,25 @@ def Sextractor(spark: SparkSession, N: int):
   #for i in rdd.takeSample(False, 10): print(i)
 
   # Convert to dataframe
-  df = rdd.toDF(fitskeys + keys)
+  df = rdd.toDF(fitskeys + keys).cache()
 
-  df.sample(False, 0.5).show(100)
+  # df.sample(False, 0.5).show(100)
 
-  """
   import matplotlib.pyplot as plt
 
   # Construct some data samples for plots
-  data = df.select("FLUXERR_ISO", "MAGERR_ISO", "MAG_ISO").filter(df.MAGERR_ISO < 0.1).filter(df.FLUXERR_ISO < 2000).toPandas().get_values().transpose()
+  # data = df.select("FLUXERR_ISO", "MAGERR_ISO", "MAG_ISO").filter(df.MAGERR_ISO < 0.1).filter(df.FLUXERR_ISO < 2000).toPandas().get_values().transpose()
+  data = df.sample(False, 0.1).select("ALPHA_SKY", "DELTA_SKY").toPandas().get_values().transpose()
+
+  exp = df.groupBy(["ALPHA_SKY", "DELTA_SKY"]).count().show(100)
 
   x = data[0].astype(float)
   y = data[1].astype(float)
-  z = abs(data[2].astype(float))
+  # z = abs(data[2].astype(float))
 
-  plt.scatter(x, y, c=z, marker='.')
-
+  # plt.scatter(x, y, c=z, marker='.')
+  plt.scatter(x, y, marker='.')
   plt.show()
-  """
 
 def analyze_fits(spark: SparkSession, N: int):
   """
@@ -200,22 +202,32 @@ def analyze_fits(spark: SparkSession, N: int):
   files = random.sample(glob.glob(images_for_CFHT_dataset), N)
 
   # Keys for metadata information to be extracted from the FITS header
-  fitskeys = ["RA_DEG", "DEC_DEG", "FILTER"]
+  fitskeys = ["RA_DEG", "DEC_DEG", "FILTER", "RUNID"]
 
   # extract metadata from FITS header:
   # - format as dataframe
   # - get array values to be plotted
   data = spark.sparkContext.parallelize(files, len(files)).map( lambda x : run_fits(fitskeys, x)).toDF(fitskeys)
-  data = data.filter(data.RA_DEG < 240).toPandas().get_values().transpose()
+  # data = data.filter(data.RA_DEG < 240)
 
-  """
+  # exp = data.groupBy(["RA_DEG", "DEC_DEG", "RUNID"]).count()
+  # exp.show(100)
+
+  data = data.toPandas().get_values().transpose()
+
   x = data[0].astype(float)
   y = data[1].astype(float)
 
+  print(','.join([str(i) for i in x.tolist()[0:10]]))
+  print(','.join([str(i) for i in y.tolist()[0:10]]))
+
   import matplotlib.pyplot as plt
-  plt.scatter(x, y, marker='.')
+  currentAxis = plt.scatter(x, y, marker='.')
+
+  from matplotlib.patches import Rectangle
+  currentAxis.axes.add_patch(Rectangle((0, 0), 10, 10, facecolor="grey"))
+
   plt.show()
-  """
 
 if __name__ == "__main__":
   ## Initialise your SparkSession
@@ -229,6 +241,6 @@ if __name__ == "__main__":
   # define the possible datasets
   ## images_for_EFIGI_dataset = "/lsst/efigi-1.6/ima_g/PGC002331*_g.fits"
 
-  Sextractor(spark, 2800)
-  # analyze_fits(spark, 2800)
+  # Sextractor(spark, 18)
+  analyze_fits(spark, 2800)
 
